@@ -1,0 +1,38 @@
+# 编译产物
+backend/build/
+*.o
+*.obj
+*.exe
+*.out
+*.app
+parking_system
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 数据文件
+backend/data/*.dat
+backend/data/*.log
+data/
+
+# Docker
+.docker/
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+*.temp

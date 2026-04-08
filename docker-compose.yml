@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  parking-system:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: parking-system
+    stdin_open: true
+    tty: true
+    volumes:
+      - parking-data:/app/data
+    restart: unless-stopped
+    networks:
+      - parking-network
+
+volumes:
+  parking-data:
+    driver: local
+
+networks:
+  parking-network:
+    driver: bridge
