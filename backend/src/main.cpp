@@ -1,10 +1,12 @@
 #include "../include/parking_lot.h"
+#include "../include/http_server.h"
 #include <csignal>
+#include <atomic>
 
-// 全局停车场实例
 ParkingLot* g_parkingLot = nullptr;
+HttpServer* g_httpServer = nullptr;
+std::atomic<bool> g_running(true);
 
-// 安全输入辅助函数 - 处理非预期输入
 template<typename T>
 bool safeInput(T& value, const std::string& errorMsg = "无效输入，请重试") {
     std::cin >> value;
@@ -17,7 +19,6 @@ bool safeInput(T& value, const std::string& errorMsg = "无效输入，请重试
     return true;
 }
 
-// 带范围检查的整数输入
 bool safeInputInt(int& value, int minVal, int maxVal, const std::string& errorMsg = "无效输入，请重试") {
     if (!safeInput(value, errorMsg)) {
         return false;
@@ -29,7 +30,6 @@ bool safeInputInt(int& value, int minVal, int maxVal, const std::string& errorMs
     return true;
 }
 
-// 带范围检查的浮点数输入
 bool safeInputDouble(double& value, double minVal, double maxVal, const std::string& errorMsg = "无效输入，请重试") {
     if (!safeInput(value, errorMsg)) {
         return false;
@@ -41,16 +41,42 @@ bool safeInputDouble(double& value, double minVal, double maxVal, const std::str
     return true;
 }
 
-// 信号处理
+void broadcastEntryEvent(const std::string& plate, const std::string& spotId) {
+    if (g_httpServer) {
+        WebSocketEvent event;
+        event.type = "entry";
+        event.plate = plate;
+        event.spotId = spotId;
+        event.timestamp = Utils::getCurrentTimeStr();
+        event.fee = -1;
+        g_httpServer->broadcastEvent(event);
+    }
+}
+
+void broadcastExitEvent(const std::string& plate, const std::string& spotId, double fee) {
+    if (g_httpServer) {
+        WebSocketEvent event;
+        event.type = "exit";
+        event.plate = plate;
+        event.spotId = spotId;
+        event.timestamp = Utils::getCurrentTimeStr();
+        event.fee = fee;
+        g_httpServer->broadcastEvent(event);
+    }
+}
+
 void signalHandler(int signum) {
+    g_running = false;
     if (g_parkingLot) {
         g_parkingLot->saveData();
+    }
+    if (g_httpServer) {
+        g_httpServer->stop();
     }
     std::cout << "\n" << Color::YELLOW << "系统已安全退出" << Color::RESET << "\n";
     exit(signum);
 }
 
-// 显示主菜单
 void displayMainMenu() {
     std::cout << "\n" << Color::CYAN
               << "╔══════════════════════════════════════════════════════════════╗\n"
@@ -64,7 +90,6 @@ void displayMainMenu() {
     std::cout << "\n请选择操作: ";
 }
 
-// 车辆入场
 void handleVehicleEntry(ParkingLot& lot) {
     std::string plate;
     int typeChoice;
@@ -90,7 +115,8 @@ void handleVehicleEntry(ParkingLot& lot) {
         std::cout << "  车位号: " << v->getSpotId() << "\n";
         std::cout << "  入场时间: " << Utils::timeToStr(v->getEntryTime()) << "\n";
         
-        // 显示路径引导
+        broadcastEntryEvent(plate, v->getSpotId());
+        
         auto path = lot.getOptimalPath(v->getSpotId());
         lot.displayPath(path);
     } else {
@@ -103,7 +129,6 @@ void handleVehicleEntry(ParkingLot& lot) {
     }
 }
 
-// 车辆出场
 void handleVehicleExit(ParkingLot& lot) {
     std::string plate;
     
@@ -116,6 +141,8 @@ void handleVehicleExit(ParkingLot& lot) {
         std::cout << Color::RED << "\n✗ 未找到该车辆" << Color::RESET << "\n";
         return;
     }
+    
+    std::string spotId = v->getSpotId();
     
     std::cout << "\n  车牌号: " << plate << "\n";
     std::cout << "  车位号: " << v->getSpotId() << "\n";
@@ -134,12 +161,13 @@ void handleVehicleExit(ParkingLot& lot) {
         std::cout << Color::GREEN << "\n✓ 出场成功！" << Color::RESET << "\n";
         std::cout << "  应付金额: " << Color::YELLOW << std::fixed << std::setprecision(2) 
                   << fee << " 元" << Color::RESET << "\n";
+        
+        broadcastExitEvent(plate, spotId, fee);
     } else {
         std::cout << Color::RED << "\n✗ 出场失败" << Color::RESET << "\n";
     }
 }
 
-// 车位查询
 void handleSpotQuery(ParkingLot& lot) {
     std::cout << "\n" << Color::CYAN << "═══ 车位查询 ═══" << Color::RESET << "\n";
     std::cout << "[1] 查看所有空闲车位\n";
@@ -193,7 +221,6 @@ void handleSpotQuery(ParkingLot& lot) {
     }
 }
 
-// 预约车位
 void handleReservation(ParkingLot& lot) {
     std::cout << "\n" << Color::CYAN << "═══ 预约车位 ═══" << Color::RESET << "\n";
     std::cout << "[1] 创建预约\n";
@@ -211,7 +238,6 @@ void handleReservation(ParkingLot& lot) {
             std::cout << "请输入车牌号: ";
             if (!safeInput(plate)) break;
             
-            // 显示可预约车位
             auto spots = lot.getAvailableSpots();
             std::cout << "\n可预约车位: ";
             for (size_t i = 0; i < std::min(spots.size(), (size_t)10); ++i) {
@@ -220,7 +246,7 @@ void handleReservation(ParkingLot& lot) {
             std::cout << "\n请输入要预约的车位号: ";
             if (!safeInput(spotId)) break;
             std::cout << "预约时长(分钟，默认30): ";
-            if (!safeInputInt(minutes, 1, 1440)) break;  // 最长24小时
+            if (!safeInputInt(minutes, 1, 1440)) break;
             if (minutes <= 0) minutes = 30;
             
             std::string reservationId = lot.createReservation(plate, spotId, minutes);
@@ -263,7 +289,6 @@ void handleReservation(ParkingLot& lot) {
     }
 }
 
-// VIP管理
 void handleVIPManagement(ParkingLot& lot) {
     std::cout << "\n" << Color::CYAN << "═══ VIP会员管理 ═══" << Color::RESET << "\n";
     std::cout << "[1] 注册会员\n";
@@ -293,7 +318,7 @@ void handleVIPManagement(ParkingLot& lot) {
             
             if (typeChoice == 1) {
                 std::cout << "购买月数: ";
-                if (!safeInputInt(months, 1, 36)) break;  // 最长3年
+                if (!safeInputInt(months, 1, 36)) break;
             }
             
             std::string memberId = lot.registerMember(plate, type, months);
@@ -358,7 +383,6 @@ void handleVIPManagement(ParkingLot& lot) {
     }
 }
 
-// 管理员功能
 void handleAdminFunctions(ParkingLot& lot) {
     std::cout << "\n" << Color::CYAN << "═══ 管理员功能 ═══" << Color::RESET << "\n";
     std::cout << "[1] 设置费率\n";
@@ -427,7 +451,6 @@ void handleAdminFunctions(ParkingLot& lot) {
     }
 }
 
-// 路径引导
 void handlePathGuide(ParkingLot& lot) {
     std::cout << "\n" << Color::CYAN << "═══ 路径引导 ═══" << Color::RESET << "\n";
     std::cout << "[1] 引导至最近空车位\n";
@@ -471,26 +494,26 @@ void handlePathGuide(ParkingLot& lot) {
 }
 
 int main() {
-    // 设置信号处理
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
     
-    // 创建停车场
     ParkingLot lot("智能停车场");
     g_parkingLot = &lot;
     
-    // 初始化：3层，每层2行5列（共30个车位）
     lot.initialize(3, 2, 5);
-    
-    // 加载历史数据
     lot.loadData();
+    
+    HttpServer httpServer(&lot, 8080);
+    g_httpServer = &httpServer;
+    httpServer.start();
     
     std::cout << Color::GREEN << "\n系统启动成功！" << Color::RESET << "\n";
     std::cout << "停车场: " << lot.getName() << "\n";
     std::cout << "总车位: " << lot.getTotalSpots() << " 个\n";
+    std::cout << Color::CYAN << "Web 监控面板: http://localhost:8080/dashboard" << Color::RESET << "\n";
     
     int choice;
-    while (true) {
+    while (g_running) {
         displayMainMenu();
         std::cin >> choice;
         
@@ -528,6 +551,7 @@ int main() {
                 break;
             case 0:
                 lot.saveData();
+                httpServer.stop();
                 std::cout << Color::GREEN << "\n感谢使用，再见！" << Color::RESET << "\n";
                 return 0;
             default:
